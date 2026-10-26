@@ -699,6 +699,7 @@
     let motionScoreHistory = [];     // Array of { time, val }
     let rawFrameBuffer = [];         // Sliding window of recent frames (for rolling std)
     let currentMotionScore = 0.0;
+    let prevActiveAmps = null;       // Previous frame amplitudes for instant fluctuation tracking
 
     // ==========================================
     // ULTRA-FAST OFFSCREEN HEATMAP ENGINE
@@ -916,6 +917,20 @@
               // Process Amplitudes
               const activeAmps = parseRawIq(raw_iq);
               if (activeAmps && activeAmps.length > 0) {
+                // Instantaneous frame-to-frame subcarrier fluctuation:
+                // Directly tracks live movement of the subcarrier waveform with zero buffer delay
+                if (prevActiveAmps && prevActiveAmps.length === activeAmps.length) {
+                  let deltaSum = 0;
+                  for (let i = 0; i < activeAmps.length; i++) {
+                    const diff = activeAmps[i] - prevActiveAmps[i];
+                    deltaSum += diff * diff;
+                  }
+                  currentMotionScore = Math.sqrt(deltaSum / activeAmps.length);
+                } else {
+                  currentMotionScore = 0.0;
+                }
+                prevActiveAmps = activeAmps.slice();
+
                 latestActiveAmplitudes = activeAmps;
 
                 // Mean Amplitude
@@ -926,11 +941,7 @@
                 meanAmplitudeHistory.push({ time: t, val: meanAmp });
                 if (meanAmplitudeHistory.length > 120) meanAmplitudeHistory.shift();
 
-                // Rolling Motion Score Buffer (last 10 frames)
-                rawFrameBuffer.push(activeAmps);
-                if (rawFrameBuffer.length > 10) rawFrameBuffer.shift();
-
-                currentMotionScore = computeMotionScore(rawFrameBuffer);
+                // Motion score history for bottom line chart
                 motionScoreHistory.push({ time: t, val: currentMotionScore });
                 if (motionScoreHistory.length > 120) motionScoreHistory.shift();
 
@@ -1183,7 +1194,8 @@
       const h = motionCanvas.height;
       motionCtx.clearRect(0, 0, w, h);
 
-      const isMotion = currentMotionScore >= motionThreshold || modelState.activity === "HAND_WAVE" || modelState.activity === "FAST_MOVEMENT";
+      // Decoupled from external model: reacts SOLELY to live Raw CSI motion score vs threshold
+      const isMotion = currentMotionScore >= motionThreshold;
       const speedMultiplier = isMotion ? 2.5 : 1.0;
       wavePhase += 0.05 * speedMultiplier;
       handAnimPhase += 0.08;
@@ -1233,7 +1245,7 @@
         motionCtx.stroke();
       }
 
-      // Animated Hand Wave Icon (Appears when motion is detected)
+      // Animated Hand Wave Icon (Appears/disappears immediately when currentMotionScore crosses motionThreshold)
       if (isMotion) {
         const handX = w / 2;
         const handY = h / 2 + Math.sin(handAnimPhase * 2) * 8;
@@ -1259,12 +1271,12 @@
         motionCtx.fillStyle = "var(--rose)";
         motionCtx.font = "bold 11px 'JetBrains Mono'";
         motionCtx.textAlign = "center";
-        motionCtx.fillText("MULTIPATH PERTURBATION DETECTED", w / 2, h - 14);
+        motionCtx.fillText(`MULTIPATH PERTURBATION DETECTED (${currentMotionScore.toFixed(2)} ≥ ${motionThreshold.toFixed(2)})`, w / 2, h - 14);
       } else {
         motionCtx.fillStyle = "var(--text-muted)";
         motionCtx.font = "11px 'JetBrains Mono'";
         motionCtx.textAlign = "center";
-        motionCtx.fillText("CHANNEL STEADY (IDLE MULTIPATH)", w / 2, h - 14);
+        motionCtx.fillText(`CHANNEL STEADY (Score: ${currentMotionScore.toFixed(2)} < ${motionThreshold.toFixed(2)})`, w / 2, h - 14);
       }
     }
 
