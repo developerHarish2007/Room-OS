@@ -1,0 +1,9 @@
+{
+  "sample_id": 1,
+  "timestamp": 1793034257.7690268,
+  "frames": 75,
+  "subcarriers": 48,
+  "duration_sec": 1.5,
+  "file": "gesture_samples\\gesture_20261026_223417_001.npy",
+  "label": "unassigned"
+}

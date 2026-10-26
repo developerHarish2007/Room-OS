@@ -1,0 +1,1523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP32 Wi-Fi CSI Live Review Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090c13;
+      --card-bg: #111726;
+      --card-border: rgba(255, 255, 255, 0.08);
+      --card-hover: rgba(255, 255, 255, 0.12);
+      --text: #f0f4fc;
+      --text-muted: #8b9bb4;
+      --cyan: #00f0ff;
+      --cyan-glow: rgba(0, 240, 255, 0.35);
+      --purple: #c084fc;
+      --purple-glow: rgba(192, 132, 252, 0.35);
+      --emerald: #10b981;
+      --amber: #f59e0b;
+      --rose: #f43f5e;
+      --font-main: 'Outfit', -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(0, 240, 255, 0.04) 0%, transparent 40%),
+        radial-gradient(circle at 85% 85%, rgba(192, 132, 252, 0.04) 0%, transparent 40%);
+      color: var(--text);
+      font-family: var(--font-main);
+      padding: 24px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* TOP HEADER & STATUS BAR */
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      padding: 16px 24px;
+      border-radius: 16px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+    }
+
+    .brand-wrap {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--cyan), #3b82f6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 20px var(--cyan-glow);
+    }
+
+    .brand-icon svg {
+      width: 26px;
+      height: 26px;
+      fill: #090c13;
+    }
+
+    h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* STATUS STRIP */
+    .status-strip {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .metric-pill {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 6px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .metric-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .metric-val {
+      font-size: 14px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      color: var(--cyan);
+    }
+
+    .no-data-alert {
+      display: none;
+      background: rgba(244, 63, 94, 0.15);
+      border: 1px solid var(--rose);
+      color: #ff6b81;
+      padding: 6px 14px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      animation: pulseAlert 1.2s infinite;
+    }
+
+    @keyframes pulseAlert {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.98); }
+    }
+
+    /* CONTROLS BAR */
+    .controls-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      padding: 12px 24px;
+      border-radius: 14px;
+    }
+
+    .controls-group {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      font-family: var(--font-main);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 18px;
+      border-radius: 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+    }
+
+    button:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.2);
+      transform: translateY(-1px);
+    }
+
+    button.primary {
+      background: linear-gradient(135deg, rgba(0, 240, 255, 0.2), rgba(59, 130, 246, 0.2));
+      border-color: var(--cyan);
+      color: var(--cyan);
+      box-shadow: 0 0 15px rgba(0, 240, 255, 0.15);
+    }
+
+    button.primary:hover {
+      background: linear-gradient(135deg, rgba(0, 240, 255, 0.35), rgba(59, 130, 246, 0.35));
+      box-shadow: 0 0 25px rgba(0, 240, 255, 0.3);
+    }
+
+    .slider-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      width: 140px;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+      outline: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--cyan);
+      cursor: pointer;
+      box-shadow: 0 0 10px var(--cyan);
+    }
+
+    .legend-tags {
+      display: flex;
+      gap: 10px;
+    }
+
+    .tag-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+    }
+
+    .tag-raw {
+      background: rgba(0, 240, 255, 0.1);
+      color: var(--cyan);
+      border: 1px solid rgba(0, 240, 255, 0.3);
+    }
+
+    .tag-model {
+      background: rgba(192, 132, 252, 0.1);
+      color: var(--purple);
+      border: 1px solid rgba(192, 132, 252, 0.3);
+    }
+
+    /* GRID SYSTEM */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 20px;
+    }
+
+    .col-12 { grid-column: span 12; }
+    .col-7  { grid-column: span 7; }
+    .col-6  { grid-column: span 6; }
+    .col-5  { grid-column: span 5; }
+
+    @media (max-width: 1080px) {
+      .col-7, .col-5, .col-6 { grid-column: span 12; }
+    }
+
+    /* CARDS */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+      transition: border-color 0.2s;
+    }
+
+    .card:hover {
+      border-color: var(--card-hover);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .source-subtext {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+
+    /* HERO DETECTION PANEL */
+    .hero-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      gap: 24px;
+      padding: 10px 0;
+      flex-wrap: wrap;
+    }
+
+    .activity-badge-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    .activity-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .activity-pill {
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      padding: 8px 24px;
+      border-radius: 14px;
+      background: rgba(192, 132, 252, 0.12);
+      border: 2px solid var(--purple);
+      color: #ffffff;
+      box-shadow: 0 0 30px var(--purple-glow);
+      transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+      display: inline-block;
+    }
+
+    .activity-pill.changed {
+      transform: scale(1.08);
+      box-shadow: 0 0 50px rgba(0, 240, 255, 0.7);
+    }
+
+    /* CONFIDENCE CIRCLE */
+    .conf-circle-wrap {
+      position: relative;
+      width: 110px;
+      height: 110px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .conf-circle-wrap svg {
+      transform: rotate(-90deg);
+      width: 100%;
+      height: 100%;
+    }
+
+    .conf-bg {
+      fill: none;
+      stroke: rgba(255, 255, 255, 0.08);
+      stroke-width: 8;
+    }
+
+    .conf-val {
+      fill: none;
+      stroke: var(--purple);
+      stroke-width: 8;
+      stroke-linecap: round;
+      stroke-dasharray: 283;
+      stroke-dashoffset: 283;
+      transition: stroke-dashoffset 0.6s ease;
+    }
+
+    .conf-text {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .conf-pct {
+      font-size: 22px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: #ffffff;
+    }
+
+    .conf-sub {
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+
+    /* EXTRA MODEL STATS */
+    .meta-badges {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .sub-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-family: var(--font-mono);
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    .dot-green { background: var(--emerald); box-shadow: 0 0 8px var(--emerald); }
+    .dot-red { background: var(--rose); box-shadow: 0 0 8px var(--rose); }
+
+    /* MOTION GRAPHICS CANVAS */
+    #motionGraphicsCanvas {
+      width: 100%;
+      height: 170px;
+      background: radial-gradient(circle at center, rgba(0, 240, 255, 0.03) 0%, transparent 70%);
+      border-radius: 12px;
+      border: 1px dashed rgba(255, 255, 255, 0.08);
+      display: block;
+    }
+
+    /* LIVE WAVEFORM CANVAS */
+    #waveformCanvas {
+      width: 100%;
+      height: 220px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 12px;
+      display: block;
+    }
+
+    /* SCROLLING HEATMAP CANVAS */
+    #heatmapCanvas {
+      width: 100%;
+      height: 220px;
+      background: #06090e;
+      border-radius: 12px;
+      display: block;
+    }
+
+    /* LINE CHARTS CANVAS */
+    #chartRawCsiCanvas, #chartModelCanvas {
+      width: 100%;
+      height: 200px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 12px;
+      display: block;
+    }
+
+    /* FOOTER WATERMARK */
+    footer {
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- TOP HEADER -->
+  <header>
+    <div class="brand-wrap">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24"><path d="M12 3C6.95 3 3.1 4.85 0 7l2 2C4.6 7.3 7.9 6 12 6s7.4 1.3 10 3l2-2c-3.1-2.15-6.95-4-12-4zm0 6c-3.3 0-6 1.3-8 3l2 2c1.6-1.3 3.7-2 6-2s4.4.7 6 2l2-2c-2-1.7-4.7-3-8-3zm0 6c-1.7 0-3 .7-4 2l4 4 4-4c-1-1.3-2.3-2-4-2z"/></svg>
+      </div>
+      <div>
+        <h1>ESP32 Wi-Fi CSI Live Review Dashboard</h1>
+        <div class="subtitle">Real-time Subcarrier Signal Processing & Physical Gesture Verification</div>
+      </div>
+    </div>
+
+    <!-- STATUS STRIP -->
+    <div class="status-strip">
+      <div class="metric-pill">
+        <span class="metric-label">Raw CSI Rate</span>
+        <span class="metric-val" id="dispFps">0.0 FPS</span>
+      </div>
+      <div class="metric-pill">
+        <span class="metric-label">Last Packet</span>
+        <span class="metric-val" id="dispLag">0.0s ago</span>
+      </div>
+      <div class="metric-pill">
+        <span class="metric-label">Total Frames</span>
+        <span class="metric-val" id="dispTotalFrames">0</span>
+      </div>
+      <div class="metric-pill">
+        <span class="metric-label">ESP32 Pkt Rate</span>
+        <span class="metric-val" id="dispPktRate" style="color: var(--purple);">-- Hz</span>
+      </div>
+      <div class="no-data-alert" id="noDataAlert">
+        WARNING: NO DATA (&gt;5s)
+      </div>
+    </div>
+  </header>
+
+  <!-- CONTROLS & SOURCE LEGEND -->
+  <div class="controls-bar">
+    <div class="controls-group">
+      <button class="primary" id="btnCalibrate">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
+        <span id="calibBtnText">Calibrate Idle (10s)</span>
+      </button>
+
+      <button id="btnPause">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" id="pauseIcon"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+        <span id="pauseBtnText">Pause</span>
+      </button>
+
+      <div class="slider-wrap">
+        <span>Motion Threshold:</span>
+        <input type="range" id="thresholdSlider" min="0.5" max="15.0" step="0.1" value="2.5">
+        <span id="thresholdVal" style="color: var(--cyan); font-weight: 700;">2.50</span>
+      </div>
+    </div>
+
+    <div class="legend-tags">
+      <div class="tag-badge tag-raw">
+        <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--cyan);"></span>
+        Raw CSI (Computed Locally)
+      </div>
+      <div class="tag-badge tag-model">
+        <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--purple);"></span>
+        Friend's Model (Unverified Reference)
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN DASHBOARD GRID -->
+  <div class="dashboard-grid">
+
+    <!-- ROW 1 LEFT: LIVE DETECTION HERO -->
+    <div class="card col-7">
+      <div class="card-header">
+        <div class="card-title">
+          <span style="color: var(--purple);">◆</span> Live Detection Output
+        </div>
+        <div class="source-subtext">[Source: Friend's Model Endpoint - Unverified]</div>
+      </div>
+
+      <div class="hero-container">
+        <!-- BIG BADGE -->
+        <div class="activity-badge-wrap">
+          <div class="activity-label">Classified Activity</div>
+          <div class="activity-pill" id="heroActivity">IDLE</div>
+        </div>
+
+        <!-- CONFIDENCE RING -->
+        <div class="conf-circle-wrap">
+          <svg viewBox="0 0 100 100">
+            <circle class="conf-bg" cx="50" cy="50" r="45"></circle>
+            <circle class="conf-val" id="confCircle" cx="50" cy="50" r="45"></circle>
+          </svg>
+          <div class="conf-text">
+            <span class="conf-pct" id="heroConf">0%</span>
+            <span class="conf-sub">Confidence</span>
+          </div>
+        </div>
+
+        <!-- METADATA BADGES -->
+        <div class="meta-badges">
+          <div class="sub-meta">
+            <span class="dot dot-green" id="dotPresence"></span>
+            <span id="txtPresence">Presence: DETECTED</span>
+          </div>
+          <div class="sub-meta">
+            <span class="dot dot-green" id="dotStatus"></span>
+            <span id="txtStatus">Sensor: ONLINE</span>
+          </div>
+          <div class="sub-meta" style="color: var(--text-muted); font-size: 11px;">
+            <span id="txtIsoTime">ISO: --</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROW 1 RIGHT: MOTION GRAPHICS -->
+    <div class="card col-5">
+      <div class="card-header">
+        <div class="card-title">
+          <span style="color: var(--cyan);">◆</span> Interactive Wi-Fi Channel Dynamics
+        </div>
+        <div class="source-subtext">Reacts Live to Raw CSI Motion Score</div>
+      </div>
+      <canvas id="motionGraphicsCanvas" width="480" height="170"></canvas>
+    </div>
+
+    <!-- ROW 2 LEFT: LIVE SUBCARRIER WAVEFORM -->
+    <div class="card col-6">
+      <div class="card-header">
+        <div class="card-title">
+          <span style="color: var(--cyan);">◆</span> Live Subcarrier Amplitude Waveform
+        </div>
+        <div class="source-subtext" id="waveformMeta">107 Active Subcarriers | Nulls Dropped</div>
+      </div>
+      <canvas id="waveformCanvas" width="600" height="220"></canvas>
+    </div>
+
+    <!-- ROW 2 RIGHT: SCROLLING HEATMAP -->
+    <div class="card col-6">
+      <div class="card-header">
+        <div class="card-title">
+          <span style="color: var(--amber);">◆</span> 60-Second Scrolling CSI Spectrogram Heatmap
+        </div>
+        <div class="source-subtext">Time &rarr; vs Active Subcarriers (Color = Amplitude)</div>
+      </div>
+      <canvas id="heatmapCanvas" width="600" height="220"></canvas>
+    </div>
+
+    <!-- ROW 3 LEFT: RAW CSI LINE CHART -->
+    <div class="card col-6">
+      <div class="card-header">
+        <div class="card-title">
+          <span style="color: var(--cyan);">◆</span> Raw CSI Motion Score & Mean Amplitude
+        </div>
+        <div class="source-subtext">[Raw CSI Pipeline - Local Verification]</div>
+      </div>
+      <canvas id="chartRawCsiCanvas" width="600" height="200"></canvas>
+    </div>
+
+    <!-- ROW 3 RIGHT: MODEL METRICS LINE CHART -->
+    <div class="card col-6">
+      <div class="card-header">
+        <div class="card-title">
+          <span style="color: var(--purple);">◆</span> External Model State Trajectory
+        </div>
+        <div class="source-subtext">[Friend's Model - Baseline Dev, Motion Level, RSSI]</div>
+      </div>
+      <canvas id="chartModelCanvas" width="600" height="200"></canvas>
+    </div>
+
+  </div>
+
+  <footer>
+    ESP32 CSI Gesture Recognition Prototype &bull; ECE Project Team Review &bull; 
+    Raw CSI: <code style="color: var(--cyan);">csi_data.json</code> &bull; 
+    Model Reference: <code style="color: var(--purple);">room_os/live_state.json</code>
+  </footer>
+
+  <script>
+    // ==========================================
+    // CONFIGURATION & CONSTANTS
+    // ==========================================
+    const CSI_URL = "https://espcsi-default-rtdb.asia-southeast1.firebasedatabase.app/csi_data.json";
+    const MODEL_URL = "https://espcsi-default-rtdb.asia-southeast1.firebasedatabase.app/room_os/live_state.json";
+
+    // Subcarriers to prune (Nulls, Guard, Metadata header, Center DC)
+    const NULL_OR_HEADER_INDICES = new Set([
+      0, 1,                                        // Header metadata ([59, -80, 3, 0])
+      27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37,  // Central null band
+      64,                                          // Center marker
+      93, 94, 95, 96, 97, 98, 99                   // High-band null/guard
+    ]);
+
+    // ==========================================
+    // STATE STORAGE
+    // ==========================================
+    let isPaused = false;
+    let motionThreshold = 2.5;
+
+    // Calibration
+    let isCalibrating = false;
+    let calibTimer = 10;
+    let calibIntervalId = null;
+    let calibScores = [];
+
+    // Polling Metrics
+    let totalFramesReceived = 0;
+    let lastRawPacketTime = Date.now();
+    let lastModelPacketTime = Date.now();
+    let rawFrameTimes = [];
+    let prevRawIqHash = "";
+
+    // Raw CSI Buffers
+    let latestActiveAmplitudes = []; // Array of float amplitudes for latest frame
+    let meanAmplitudeHistory = [];   // Array of { time, val }
+    let motionScoreHistory = [];     // Array of { time, val }
+    let rawFrameBuffer = [];         // Sliding window of recent frames (for rolling std)
+    let currentMotionScore = 0.0;
+
+    // ==========================================
+    // ULTRA-FAST OFFSCREEN HEATMAP ENGINE
+    // ==========================================
+    const HEATMAP_COLS = 200;
+    const offscreenHeatmap = document.createElement("canvas");
+    const offscreenCtx = offscreenHeatmap.getContext("2d");
+    let heatmapImgData = null;
+    let heatmapPixels = null;
+    let currentHeatmapRows = 0;
+
+    // Precomputed 256-entry RGBA color LUT (Turbo / Plasma style)
+    // Little-endian Uint32 format: (Alpha << 24) | (Blue << 16) | (Green << 8) | Red
+    const COLOR_LUT = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      const norm = i / 255.0;
+      const r = Math.round(255 * Math.sin(norm * Math.PI * 0.9));
+      const g = Math.round(255 * Math.pow(norm, 1.8));
+      const b = Math.round(255 * (1.0 - norm));
+      COLOR_LUT[i] = (255 << 24) | (b << 16) | (g << 8) | r;
+    }
+
+    function initHeatmapBuffer(numRows) {
+      currentHeatmapRows = numRows;
+      offscreenHeatmap.width = HEATMAP_COLS;
+      offscreenHeatmap.height = numRows;
+      heatmapImgData = offscreenCtx.createImageData(HEATMAP_COLS, numRows);
+      heatmapPixels = new Uint32Array(heatmapImgData.data.buffer);
+      heatmapPixels.fill(COLOR_LUT[0]);
+      offscreenCtx.putImageData(heatmapImgData, 0, 0);
+    }
+
+    function pushHeatmapFrame(activeAmps) {
+      const K = activeAmps.length;
+      if (K === 0) return;
+      if (!heatmapPixels || currentHeatmapRows !== K) {
+        initHeatmapBuffer(K);
+      }
+
+      // Fast shift left by 1 column in memory
+      for (let r = 0; r < K; r++) {
+        const rowOffset = r * HEATMAP_COLS;
+        heatmapPixels.copyWithin(rowOffset, rowOffset + 1, rowOffset + HEATMAP_COLS);
+      }
+
+      // Append new frame column at rightmost column (HEATMAP_COLS - 1)
+      // Subcarrier 0 displayed at bottom (row K - 1), highest subcarrier at top (row 0)
+      for (let sc = 0; sc < K; sc++) {
+        const row = K - 1 - sc;
+        const val = activeAmps[sc];
+        const norm = Math.max(0, Math.min(255, Math.round(((val - 10) / 45) * 255)));
+        heatmapPixels[row * HEATMAP_COLS + (HEATMAP_COLS - 1)] = COLOR_LUT[norm];
+      }
+
+      // Blit to offscreen canvas once per raw CSI packet
+      offscreenCtx.putImageData(heatmapImgData, 0, 0);
+    } 
+
+    // Model State Buffers
+    let modelState = {
+      activity: "IDLE",
+      confidence: 0,
+      presence: false,
+      motion_level: 0,
+      baseline_deviation: 0,
+      esp32_packet_rate_hz: 0,
+      esp32_rssi_dbm: 0,
+      sensor_status: "ONLINE",
+      iso_time: "--"
+    };
+    let modelTrajectoryHistory = []; // { time, motion_level, baseline_dev, rssi }
+
+    // ==========================================
+    // DOM ELEMENTS
+    // ==========================================
+    const dispFps = document.getElementById("dispFps");
+    const dispLag = document.getElementById("dispLag");
+    const dispTotalFrames = document.getElementById("dispTotalFrames");
+    const dispPktRate = document.getElementById("dispPktRate");
+    const noDataAlert = document.getElementById("noDataAlert");
+
+    const heroActivity = document.getElementById("heroActivity");
+    const heroConf = document.getElementById("heroConf");
+    const confCircle = document.getElementById("confCircle");
+    const dotPresence = document.getElementById("dotPresence");
+    const txtPresence = document.getElementById("txtPresence");
+    const dotStatus = document.getElementById("dotStatus");
+    const txtStatus = document.getElementById("txtStatus");
+    const txtIsoTime = document.getElementById("txtIsoTime");
+
+    const thresholdSlider = document.getElementById("thresholdSlider");
+    const thresholdVal = document.getElementById("thresholdVal");
+    const btnCalibrate = document.getElementById("btnCalibrate");
+    const calibBtnText = document.getElementById("calibBtnText");
+    const btnPause = document.getElementById("btnPause");
+    const pauseBtnText = document.getElementById("pauseBtnText");
+
+    const motionCanvas = document.getElementById("motionGraphicsCanvas");
+    const motionCtx = motionCanvas.getContext("2d");
+
+    const waveformCanvas = document.getElementById("waveformCanvas");
+    const waveformCtx = waveformCanvas.getContext("2d");
+
+    const heatmapCanvas = document.getElementById("heatmapCanvas");
+    const heatmapCtx = heatmapCanvas.getContext("2d");
+
+    const chartRawCanvas = document.getElementById("chartRawCsiCanvas");
+    const chartRawCtx = chartRawCanvas.getContext("2d");
+
+    const chartModelCanvas = document.getElementById("chartModelCanvas");
+    const chartModelCtx = chartModelCanvas.getContext("2d");
+
+    // ==========================================
+    // PARSING & MATH LOGIC
+    // ==========================================
+    function parseRawIq(raw_iq) {
+      if (!raw_iq || raw_iq.length < 20) return null;
+      const numPairs = Math.floor(raw_iq.length / 2);
+      const activeAmps = [];
+
+      for (let sc = 0; sc < numPairs; sc++) {
+        const q = raw_iq[sc * 2];
+        const i = raw_iq[sc * 2 + 1];
+
+        // Drop null / guard / filler
+        const isNull = NULL_OR_HEADER_INDICES.has(sc) || 
+                       (Math.abs(i) < 1e-4 && Math.abs(q) < 1e-4) || 
+                       (i === -1 && q === -1);
+
+        if (!isNull) {
+          const amp = Math.sqrt(i * i + q * q);
+          activeAmps.push(amp);
+        }
+      }
+      return activeAmps;
+    }
+
+    function computeMotionScore(frames) {
+      if (frames.length < 3) return 0.0;
+      const K = frames[0].length;
+      let totalStd = 0.0;
+
+      for (let sc = 0; sc < K; sc++) {
+        let sum = 0;
+        for (let f = 0; f < frames.length; f++) sum += frames[f][sc];
+        const mean = sum / frames.length;
+
+        let varSum = 0;
+        for (let f = 0; f < frames.length; f++) {
+          const diff = frames[f][sc] - mean;
+          varSum += diff * diff;
+        }
+        totalStd += Math.sqrt(varSum / frames.length);
+      }
+      return totalStd / K;
+    }
+
+    // Exact deduplication check
+    let prevRawIq = null;
+
+    function isRawIqDuplicate(current, previous) {
+      if (!previous || !current) return false;
+      if (current.length !== previous.length) return false;
+      for (let i = 0; i < current.length; i++) {
+        if (current[i] !== previous[i]) return false;
+      }
+      return true;
+    }
+
+    // ==========================================
+    // POLLING ENGINE (CONCURRENCY-GUARDED)
+    // ==========================================
+
+    let isFetchingRaw = false;
+
+    // 1. Raw CSI Polling (3x per second -> ~320ms)
+    async function pollRawCsi() {
+      if (isPaused) {
+        setTimeout(pollRawCsi, 500);
+        return;
+      }
+      if (isFetchingRaw) {
+        setTimeout(pollRawCsi, 100);
+        return;
+      }
+
+      isFetchingRaw = true;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+      try {
+        const res = await fetch(CSI_URL, { 
+          cache: "no-store",
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const data = await res.json();
+          const raw_iq = data.raw_iq;
+
+          if (raw_iq && raw_iq.length >= 256) {
+            if (!isRawIqDuplicate(raw_iq, prevRawIq)) {
+              prevRawIq = raw_iq;
+              lastRawPacketTime = Date.now();
+              totalFramesReceived++;
+
+              // Track FPS
+              const now = performance.now();
+              rawFrameTimes.push(now);
+              while (rawFrameTimes.length > 0 && rawFrameTimes[0] < now - 2000) {
+                rawFrameTimes.shift();
+              }
+
+              // Process Amplitudes
+              const activeAmps = parseRawIq(raw_iq);
+              if (activeAmps && activeAmps.length > 0) {
+                latestActiveAmplitudes = activeAmps;
+
+                // Mean Amplitude
+                let sumAmp = 0;
+                for (let i = 0; i < activeAmps.length; i++) sumAmp += activeAmps[i];
+                const meanAmp = sumAmp / activeAmps.length;
+                const t = Date.now();
+                meanAmplitudeHistory.push({ time: t, val: meanAmp });
+                if (meanAmplitudeHistory.length > 120) meanAmplitudeHistory.shift();
+
+                // Rolling Motion Score Buffer (last 10 frames)
+                rawFrameBuffer.push(activeAmps);
+                if (rawFrameBuffer.length > 10) rawFrameBuffer.shift();
+
+                currentMotionScore = computeMotionScore(rawFrameBuffer);
+                motionScoreHistory.push({ time: t, val: currentMotionScore });
+                if (motionScoreHistory.length > 120) motionScoreHistory.shift();
+
+                // Calibration collection
+                if (isCalibrating) {
+                  calibScores.push(currentMotionScore);
+                }
+
+                // Push new column to offscreen heatmap buffer
+                pushHeatmapFrame(activeAmps);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Network hiccup or abort - handled gracefully
+      } finally {
+        clearTimeout(timeoutId);
+        isFetchingRaw = false;
+        setTimeout(pollRawCsi, 320);
+      }
+    }
+
+    let isFetchingModel = false;
+
+    // 2. Friend's Model Polling (1x per second -> 1000ms)
+    async function pollModel() {
+      if (isPaused) {
+        setTimeout(pollModel, 1000);
+        return;
+      }
+      if (isFetchingModel) {
+        setTimeout(pollModel, 200);
+        return;
+      }
+
+      isFetchingModel = true;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+
+      try {
+        const res = await fetch(MODEL_URL, { 
+          cache: "no-store",
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const data = await res.json();
+          lastModelPacketTime = Date.now();
+
+          const prevAct = modelState.activity;
+          modelState = {
+            activity: data.activity || "UNKNOWN",
+            confidence: data.confidence !== undefined ? Math.round(data.confidence * 100) : 0,
+            presence: Boolean(data.presence),
+            motion_level: data.motion_level !== undefined ? data.motion_level : 0,
+            baseline_deviation: data.baseline_deviation !== undefined ? data.baseline_deviation : 0,
+            esp32_packet_rate_hz: data.esp32_packet_rate_hz || 0,
+            esp32_rssi_dbm: data.esp32_rssi_dbm || 0,
+            sensor_status: data.sensor_status || "ONLINE",
+            iso_time: data.iso_time || "--"
+          };
+
+          // Trajectory History
+          modelTrajectoryHistory.push({
+            time: Date.now(),
+            motion_level: modelState.motion_level,
+            baseline_deviation: modelState.baseline_deviation,
+            rssi: modelState.esp32_rssi_dbm
+          });
+          if (modelTrajectoryHistory.length > 120) modelTrajectoryHistory.shift();
+
+          // Animate hero on activity change
+          if (prevAct !== modelState.activity) {
+            heroActivity.classList.add("changed");
+            setTimeout(() => heroActivity.classList.remove("changed"), 600);
+          }
+
+          updateModelDom();
+        }
+      } catch (e) {
+        // Network hiccup - handled gracefully
+      } finally {
+        clearTimeout(timeoutId);
+        isFetchingModel = false;
+        setTimeout(pollModel, 1000);
+      }
+    }
+
+    // Update Model DOM
+    function updateModelDom() {
+      heroActivity.textContent = modelState.activity;
+      heroConf.textContent = `${modelState.confidence}%`;
+
+      // Animate confidence ring (283 is perimeter)
+      const offset = 283 - (283 * modelState.confidence / 100);
+      confCircle.style.strokeDashoffset = offset;
+
+      // Colorize badge according to activity
+      if (modelState.activity === "HAND_WAVE") {
+        heroActivity.style.borderColor = "var(--cyan)";
+        heroActivity.style.boxShadow = "0 0 30px var(--cyan-glow)";
+        heroActivity.style.color = "var(--cyan)";
+      } else if (modelState.activity === "FAST_MOVEMENT") {
+        heroActivity.style.borderColor = "var(--amber)";
+        heroActivity.style.boxShadow = "0 0 30px rgba(245, 158, 11, 0.4)";
+        heroActivity.style.color = "var(--amber)";
+      } else {
+        heroActivity.style.borderColor = "var(--purple)";
+        heroActivity.style.boxShadow = "0 0 30px var(--purple-glow)";
+        heroActivity.style.color = "#ffffff";
+      }
+
+      // Presence & Status
+      if (modelState.presence) {
+        dotPresence.className = "dot dot-green";
+        txtPresence.textContent = "Presence: DETECTED";
+      } else {
+        dotPresence.className = "dot dot-red";
+        txtPresence.textContent = "Presence: NONE";
+      }
+
+      if (modelState.sensor_status === "ONLINE") {
+        dotStatus.className = "dot dot-green";
+        txtStatus.textContent = "Sensor: ONLINE";
+      } else {
+        dotStatus.className = "dot dot-red";
+        txtStatus.textContent = `Sensor: ${modelState.sensor_status}`;
+      }
+
+      txtIsoTime.textContent = `ISO: ${modelState.iso_time}`;
+      dispPktRate.textContent = `${modelState.esp32_packet_rate_hz.toFixed(1)} Hz`;
+    }
+
+    // ==========================================
+    // UI INTERACTION & CONTROLS
+    // ==========================================
+    thresholdSlider.addEventListener("input", (e) => {
+      motionThreshold = parseFloat(e.target.value);
+      thresholdVal.textContent = motionThreshold.toFixed(2);
+    });
+
+    btnPause.addEventListener("click", () => {
+      isPaused = !isPaused;
+      if (isPaused) {
+        pauseBtnText.textContent = "Resume";
+        btnPause.style.borderColor = "var(--amber)";
+        btnPause.style.color = "var(--amber)";
+      } else {
+        pauseBtnText.textContent = "Pause";
+        btnPause.style.borderColor = "var(--card-border)";
+        btnPause.style.color = "var(--text)";
+      }
+    });
+
+    btnCalibrate.addEventListener("click", () => {
+      if (isCalibrating) return;
+      isCalibrating = true;
+      calibScores = [];
+      calibTimer = 10;
+      calibBtnText.textContent = `Calibrating (${calibTimer}s)... Keep Idle!`;
+      btnCalibrate.style.borderColor = "var(--amber)";
+      btnCalibrate.style.color = "var(--amber)";
+
+      calibIntervalId = setInterval(() => {
+        calibTimer--;
+        if (calibTimer > 0) {
+          calibBtnText.textContent = `Calibrating (${calibTimer}s)... Keep Idle!`;
+        } else {
+          clearInterval(calibIntervalId);
+          isCalibrating = false;
+
+          // Compute mean + 3 * std
+          if (calibScores.length > 5) {
+            const m = calibScores.reduce((a, b) => a + b, 0) / calibScores.length;
+            const variance = calibScores.reduce((sum, v) => sum + Math.pow(v - m, 2), 0) / calibScores.length;
+            const std = Math.sqrt(variance);
+            const newThresh = Math.max(0.8, m + 3.0 * std);
+
+            motionThreshold = parseFloat(newThresh.toFixed(2));
+            thresholdSlider.value = motionThreshold;
+            thresholdVal.textContent = motionThreshold.toFixed(2);
+            calibBtnText.textContent = `Calibrated (${motionThreshold.toFixed(2)})`;
+          } else {
+            calibBtnText.textContent = "Calibrate Idle (10s)";
+          }
+
+          setTimeout(() => {
+            calibBtnText.textContent = "Calibrate Idle (10s)";
+            btnCalibrate.style.borderColor = "var(--cyan)";
+            btnCalibrate.style.color = "var(--cyan)";
+          }, 3000);
+        }
+      }, 1000);
+    });
+
+    // ==========================================
+    // CANVASES & RENDER LOOPS (60 FPS)
+    // ==========================================
+
+    let wavePhase = 0;
+    let handAnimPhase = 0;
+
+    function renderLoop() {
+      try {
+        const now = Date.now();
+
+        // 1. Update Status Strip
+        const fpsVal = rawFrameTimes.length > 0 ? (rawFrameTimes.length / 2).toFixed(1) : "0.0";
+        dispFps.textContent = `${fpsVal} FPS`;
+
+        const lagSec = ((now - lastRawPacketTime) / 1000).toFixed(1);
+        dispLag.textContent = `${lagSec}s ago`;
+        dispTotalFrames.textContent = totalFramesReceived;
+
+        // 5-second NO DATA warning
+        if (now - lastRawPacketTime > 5000 || now - lastModelPacketTime > 5000) {
+          noDataAlert.style.display = "block";
+        } else {
+          noDataAlert.style.display = "none";
+        }
+
+        // 2. Render Motion Graphics Canvas
+        renderMotionGraphics();
+
+        // 3. Render Waveform Canvas
+        renderWaveform();
+
+        // 4. Render Scrolling Heatmap
+        renderHeatmap();
+
+        // 5. Render Raw CSI Line Chart
+        renderChartRawCsi();
+
+        // 6. Render Model Trajectory Line Chart
+        renderChartModel();
+      } catch (err) {
+        console.error("Dashboard renderLoop error:", err);
+      } finally {
+        requestAnimationFrame(renderLoop);
+      }
+    }
+
+    // ------------------------------------------
+    // MOTION GRAPHICS: WI-FI RIPPLES & HAND WAVE
+    // ------------------------------------------
+    function renderMotionGraphics() {
+      const w = motionCanvas.width;
+      const h = motionCanvas.height;
+      motionCtx.clearRect(0, 0, w, h);
+
+      const isMotion = currentMotionScore >= motionThreshold || modelState.activity === "HAND_WAVE" || modelState.activity === "FAST_MOVEMENT";
+      const speedMultiplier = isMotion ? 2.5 : 1.0;
+      wavePhase += 0.05 * speedMultiplier;
+      handAnimPhase += 0.08;
+
+      const txX = 70;
+      const txY = h / 2;
+      const rxX = w - 70;
+      const rxY = h / 2;
+
+      // Draw ESP32 Tx Box
+      motionCtx.fillStyle = "#1e293b";
+      motionCtx.strokeStyle = "rgba(0, 240, 255, 0.5)";
+      motionCtx.lineWidth = 2;
+      motionCtx.beginPath();
+      motionCtx.roundRect(txX - 25, txY - 20, 50, 40, 6);
+      motionCtx.fill();
+      motionCtx.stroke();
+      motionCtx.fillStyle = "var(--cyan)";
+      motionCtx.font = "bold 10px 'JetBrains Mono'";
+      motionCtx.fillText("ESP32-Tx", txX - 22, txY + 4);
+
+      // Draw ESP32 Rx Box
+      motionCtx.fillStyle = "#1e293b";
+      motionCtx.strokeStyle = "rgba(192, 132, 252, 0.5)";
+      motionCtx.beginPath();
+      motionCtx.roundRect(rxX - 25, rxY - 20, 50, 40, 6);
+      motionCtx.fill();
+      motionCtx.stroke();
+      motionCtx.fillStyle = "var(--purple)";
+      motionCtx.fillText("ESP32-Rx", rxX - 22, rxY + 4);
+
+      // Expanding Wi-Fi Ripples from Tx -> Rx
+      const numRipples = 6;
+      for (let r = 0; r < numRipples; r++) {
+        const progress = ((wavePhase + r / numRipples) % 1.0);
+        const radius = progress * (rxX - txX);
+        const alpha = Math.max(0.05, Math.sin(progress * Math.PI) * (isMotion ? 0.7 : 0.25));
+
+        // Perturb curve with motion noise if motion is high, guaranteeing radius >= 1
+        const distortion = isMotion ? Math.sin(wavePhase * 3 + r) * 8 : 0;
+        const effRadius = Math.max(1, radius + distortion);
+
+        motionCtx.beginPath();
+        motionCtx.arc(txX, txY, effRadius, -Math.PI / 3, Math.PI / 3);
+        motionCtx.strokeStyle = isMotion ? `rgba(244, 63, 94, ${alpha})` : `rgba(0, 240, 255, ${alpha})`;
+        motionCtx.lineWidth = isMotion ? 3 : 1.5;
+        motionCtx.stroke();
+      }
+
+      // Animated Hand Wave Icon (Appears when motion is detected)
+      if (isMotion) {
+        const handX = w / 2;
+        const handY = h / 2 + Math.sin(handAnimPhase * 2) * 8;
+        const handAngle = Math.sin(handAnimPhase * 3) * 0.35; // waving angle
+
+        motionCtx.save();
+        motionCtx.translate(handX, handY);
+        motionCtx.rotate(handAngle);
+
+        // Hand Glow
+        motionCtx.shadowColor = "rgba(0, 240, 255, 0.8)";
+        motionCtx.shadowBlur = 20;
+
+        // Draw Hand (Emoji or Vector)
+        motionCtx.font = "38px sans-serif";
+        motionCtx.textAlign = "center";
+        motionCtx.textBaseline = "middle";
+        motionCtx.fillText("👋", 0, 0);
+
+        motionCtx.restore();
+
+        // Label
+        motionCtx.fillStyle = "var(--rose)";
+        motionCtx.font = "bold 11px 'JetBrains Mono'";
+        motionCtx.textAlign = "center";
+        motionCtx.fillText("MULTIPATH PERTURBATION DETECTED", w / 2, h - 14);
+      } else {
+        motionCtx.fillStyle = "var(--text-muted)";
+        motionCtx.font = "11px 'JetBrains Mono'";
+        motionCtx.textAlign = "center";
+        motionCtx.fillText("CHANNEL STEADY (IDLE MULTIPATH)", w / 2, h - 14);
+      }
+    }
+
+    // ------------------------------------------
+    // LIVE WAVEFORM: SUBCARRIER AMPLITUDES
+    // ------------------------------------------
+    function renderWaveform() {
+      const w = waveformCanvas.width;
+      const h = waveformCanvas.height;
+      waveformCtx.clearRect(0, 0, w, h);
+
+      if (!latestActiveAmplitudes || latestActiveAmplitudes.length === 0) {
+        waveformCtx.fillStyle = "var(--text-muted)";
+        waveformCtx.font = "12px 'JetBrains Mono'";
+        waveformCtx.fillText("Waiting for raw CSI frames...", w / 2 - 80, h / 2);
+        return;
+      }
+
+      const K = latestActiveAmplitudes.length;
+      const padX = 30;
+      const padY = 25;
+      const plotW = w - padX * 2;
+      const plotH = h - padY * 2;
+
+      // Find max amplitude for dynamic scale
+      const maxAmp = Math.max(60, ...latestActiveAmplitudes);
+
+      // Grid lines
+      waveformCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+      waveformCtx.lineWidth = 1;
+      for (let g = 0; g <= 4; g++) {
+        const y = padY + (plotH / 4) * g;
+        waveformCtx.beginPath();
+        waveformCtx.moveTo(padX, y);
+        waveformCtx.lineTo(w - padX, y);
+        waveformCtx.stroke();
+      }
+
+      // Draw Gradient Area & Line
+      const grad = waveformCtx.createLinearGradient(0, padY, 0, h - padY);
+      grad.addColorStop(0, "rgba(0, 240, 255, 0.45)");
+      grad.addColorStop(1, "rgba(0, 240, 255, 0.0)");
+
+      waveformCtx.beginPath();
+      for (let i = 0; i < K; i++) {
+        const x = padX + (plotW / (K - 1)) * i;
+        const y = h - padY - (latestActiveAmplitudes[i] / maxAmp) * plotH;
+        if (i === 0) waveformCtx.moveTo(x, y);
+        else waveformCtx.lineTo(x, y);
+      }
+
+      // Fill area under curve
+      waveformCtx.lineTo(w - padX, h - padY);
+      waveformCtx.lineTo(padX, h - padY);
+      waveformCtx.closePath();
+      waveformCtx.fillStyle = grad;
+      waveformCtx.fill();
+
+      // Stroke Line
+      waveformCtx.beginPath();
+      for (let i = 0; i < K; i++) {
+        const x = padX + (plotW / (K - 1)) * i;
+        const y = h - padY - (latestActiveAmplitudes[i] / maxAmp) * plotH;
+        if (i === 0) waveformCtx.moveTo(x, y);
+        else waveformCtx.lineTo(x, y);
+      }
+      waveformCtx.strokeStyle = "var(--cyan)";
+      waveformCtx.lineWidth = 2;
+      waveformCtx.stroke();
+
+      // Labels
+      waveformCtx.fillStyle = "var(--text-muted)";
+      waveformCtx.font = "10px 'JetBrains Mono'";
+      waveformCtx.fillText("0", padX - 15, h - padY);
+      waveformCtx.fillText(maxAmp.toFixed(0), padX - 22, padY + 4);
+      waveformCtx.fillText("Subcarrier 0", padX, h - 8);
+      waveformCtx.fillText(`Subcarrier ${K-1}`, w - padX - 70, h - 8);
+    }
+
+    // ------------------------------------------
+    // 60-SECOND SCROLLING HEATMAP (GPU-ACCELERATED BLIT)
+    // ------------------------------------------
+    function renderHeatmap() {
+      const w = heatmapCanvas.width;
+      const h = heatmapCanvas.height;
+      heatmapCtx.clearRect(0, 0, w, h);
+
+      if (offscreenHeatmap.width > 0 && heatmapPixels) {
+        heatmapCtx.imageSmoothingEnabled = false;
+        heatmapCtx.drawImage(offscreenHeatmap, 0, 0, w, h);
+      }
+
+      // Time Grid Markers
+      heatmapCtx.fillStyle = "rgba(255, 255, 255, 0.6)";
+      heatmapCtx.font = "9px 'JetBrains Mono'";
+      heatmapCtx.fillText("-60s", 8, h - 6);
+      heatmapCtx.fillText("-30s", Math.floor(w / 2) - 12, h - 6);
+      heatmapCtx.fillText("Now", w - 28, h - 6);
+    }
+
+    // ------------------------------------------
+    // RAW CSI LINE CHART: MOTION SCORE & MEAN AMP
+    // ------------------------------------------
+    function renderChartRawCsi() {
+      const w = chartRawCanvas.width;
+      const h = chartRawCanvas.height;
+      chartRawCtx.clearRect(0, 0, w, h);
+
+      const padX = 40;
+      const padY = 20;
+      const plotW = w - padX * 2;
+      const plotH = h - padY * 2;
+
+      // Grid
+      chartRawCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+      chartRawCtx.lineWidth = 1;
+      for (let g = 0; g <= 4; g++) {
+        const y = padY + (plotH / 4) * g;
+        chartRawCtx.beginPath();
+        chartRawCtx.moveTo(padX, y);
+        chartRawCtx.lineTo(w - padX, y);
+        chartRawCtx.stroke();
+      }
+
+      const maxVal = Math.max(12, motionThreshold * 1.8);
+
+      // Draw Threshold Line (Dashed Red)
+      const threshY = h - padY - (motionThreshold / maxVal) * plotH;
+      chartRawCtx.strokeStyle = "var(--rose)";
+      chartRawCtx.lineWidth = 1.5;
+      chartRawCtx.setLineDash([4, 4]);
+      chartRawCtx.beginPath();
+      chartRawCtx.moveTo(padX, threshY);
+      chartRawCtx.lineTo(w - padX, threshY);
+      chartRawCtx.stroke();
+      chartRawCtx.setLineDash([]);
+      chartRawCtx.fillStyle = "var(--rose)";
+      chartRawCtx.font = "9px 'JetBrains Mono'";
+      chartRawCtx.fillText(`Threshold: ${motionThreshold.toFixed(2)}`, w - padX - 85, threshY - 4);
+
+      // Plot Motion Score Line (Cyan)
+      if (motionScoreHistory.length > 1) {
+        chartRawCtx.beginPath();
+        for (let i = 0; i < motionScoreHistory.length; i++) {
+          const x = padX + (plotW / 120) * (120 - motionScoreHistory.length + i);
+          const y = h - padY - (motionScoreHistory[i].val / maxVal) * plotH;
+          if (i === 0) chartRawCtx.moveTo(x, y);
+          else chartRawCtx.lineTo(x, y);
+        }
+        chartRawCtx.strokeStyle = "var(--cyan)";
+        chartRawCtx.lineWidth = 2;
+        chartRawCtx.stroke();
+      }
+
+      // Plot Mean Amplitude (Scaled / Gold dashed)
+      if (meanAmplitudeHistory.length > 1) {
+        chartRawCtx.beginPath();
+        for (let i = 0; i < meanAmplitudeHistory.length; i++) {
+          const x = padX + (plotW / 120) * (120 - meanAmplitudeHistory.length + i);
+          // Scale 0-60 amp into plot
+          const y = h - padY - ((meanAmplitudeHistory[i].val / 60) * maxVal / maxVal) * plotH;
+          if (i === 0) chartRawCtx.moveTo(x, y);
+          else chartRawCtx.lineTo(x, y);
+        }
+        chartRawCtx.strokeStyle = "rgba(245, 158, 11, 0.6)";
+        chartRawCtx.lineWidth = 1.5;
+        chartRawCtx.stroke();
+      }
+
+      // Labels & Legend
+      chartRawCtx.fillStyle = "var(--cyan)";
+      chartRawCtx.font = "bold 10px 'JetBrains Mono'";
+      chartRawCtx.fillText(`— Motion Score (${currentMotionScore.toFixed(2)})`, padX, padY + 12);
+
+      chartRawCtx.fillStyle = "var(--amber)";
+      const lastMean = meanAmplitudeHistory.length > 0 ? meanAmplitudeHistory[meanAmplitudeHistory.length - 1].val.toFixed(1) : "0";
+      chartRawCtx.fillText(`— Mean Amp (${lastMean})`, padX + 160, padY + 12);
+    }
+
+    // ------------------------------------------
+    // MODEL LINE CHART: BASELINE DEV, MOTION LEVEL, RSSI
+    // ------------------------------------------
+    function renderChartModel() {
+      const w = chartModelCanvas.width;
+      const h = chartModelCanvas.height;
+      chartModelCtx.clearRect(0, 0, w, h);
+
+      const padX = 40;
+      const padY = 20;
+      const plotW = w - padX * 2;
+      const plotH = h - padY * 2;
+
+      // Grid
+      chartModelCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+      chartModelCtx.lineWidth = 1;
+      for (let g = 0; g <= 4; g++) {
+        const y = padY + (plotH / 4) * g;
+        chartModelCtx.beginPath();
+        chartModelCtx.moveTo(padX, y);
+        chartModelCtx.lineTo(w - padX, y);
+        chartModelCtx.stroke();
+      }
+
+      const maxDev = 4.0;
+
+      // Plot Baseline Deviation Line (Purple)
+      if (modelTrajectoryHistory.length > 1) {
+        chartModelCtx.beginPath();
+        for (let i = 0; i < modelTrajectoryHistory.length; i++) {
+          const x = padX + (plotW / 120) * (120 - modelTrajectoryHistory.length + i);
+          const y = h - padY - (Math.min(maxDev, modelTrajectoryHistory[i].baseline_deviation) / maxDev) * plotH;
+          if (i === 0) chartModelCtx.moveTo(x, y);
+          else chartModelCtx.lineTo(x, y);
+        }
+        chartModelCtx.strokeStyle = "var(--purple)";
+        chartModelCtx.lineWidth = 2;
+        chartModelCtx.stroke();
+      }
+
+      // Plot Motion Level (Step Emerald)
+      if (modelTrajectoryHistory.length > 1) {
+        chartModelCtx.beginPath();
+        for (let i = 0; i < modelTrajectoryHistory.length; i++) {
+          const x = padX + (plotW / 120) * (120 - modelTrajectoryHistory.length + i);
+          const y = h - padY - (modelTrajectoryHistory[i].motion_level * 0.8) * plotH;
+          if (i === 0) chartModelCtx.moveTo(x, y);
+          else chartModelCtx.lineTo(x, y);
+        }
+        chartModelCtx.strokeStyle = "var(--emerald)";
+        chartModelCtx.lineWidth = 1.5;
+        chartModelCtx.stroke();
+      }
+
+      // Legend
+      chartModelCtx.fillStyle = "var(--purple)";
+      chartModelCtx.font = "bold 10px 'JetBrains Mono'";
+      chartModelCtx.fillText(`— Baseline Dev (${modelState.baseline_deviation.toFixed(2)})`, padX, padY + 12);
+
+      chartModelCtx.fillStyle = "var(--emerald)";
+      chartModelCtx.fillText(`— Motion Level (${modelState.motion_level})`, padX + 160, padY + 12);
+
+      chartModelCtx.fillStyle = "var(--text-muted)";
+      chartModelCtx.fillText(`RSSI: ${modelState.esp32_rssi_dbm} dBm`, padX + 300, padY + 12);
+    }
+
+    // ==========================================
+    // INITIALIZATION
+    // ==========================================
+    window.addEventListener("DOMContentLoaded", () => {
+      pollRawCsi();
+      pollModel();
+      requestAnimationFrame(renderLoop);
+    });
+  </script>
+</body>
+</html>
