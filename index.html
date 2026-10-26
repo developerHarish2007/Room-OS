@@ -494,12 +494,16 @@
 
     <!-- STATUS STRIP -->
     <div class="status-strip">
+      <div class="metric-pill" id="pillSource" style="border-color: rgba(0, 240, 255, 0.4);">
+        <span class="metric-label">Data Source</span>
+        <span class="metric-val" id="dispSource" style="color: var(--cyan); font-size: 13px;">Connecting...</span>
+      </div>
       <div class="metric-pill">
         <span class="metric-label">Raw CSI Rate</span>
         <span class="metric-val" id="dispFps">0.0 FPS</span>
       </div>
       <div class="metric-pill">
-        <span class="metric-label">Last Packet</span>
+        <span class="metric-label">Stream Latency</span>
         <span class="metric-val" id="dispLag">0.0s ago</span>
       </div>
       <div class="metric-pill">
@@ -665,6 +669,7 @@
     // ==========================================
     const CSI_URL = "https://espcsi-default-rtdb.asia-southeast1.firebasedatabase.app/csi_data.json";
     const MODEL_URL = "https://espcsi-default-rtdb.asia-southeast1.firebasedatabase.app/room_os/live_state.json";
+    const WS_URL = "ws://localhost:8765";
 
     // Subcarriers to prune (Nulls, Guard, Metadata header, Center DC)
     const NULL_OR_HEADER_INDICES = new Set([
@@ -680,9 +685,14 @@
     let isPaused = false;
     let motionThreshold = 2.5;
 
+    // Dual Data Pipeline (Local WebSocket with Firebase Cloud fallback)
+    let ws = null;
+    let wsConnected = false;
+    let currentSource = "connecting"; // "websocket" | "firebase"
+
     // Calibration
     let isCalibrating = false;
-    let calibTimer = 10;
+    let calibTimer = 4;
     let calibIntervalId = null;
     let calibScores = [];
 
@@ -691,15 +701,20 @@
     let lastRawPacketTime = Date.now();
     let lastModelPacketTime = Date.now();
     let rawFrameTimes = [];
-    let prevRawIqHash = "";
+    let prevRawIq = null;
+
+    // Robust Motion Detection & Hysteresis State Machine
+    let isMotionActive = false;
+    let motionTriggerFrames = 0;
+    let motionReleaseFrames = 0;
+    let csiFrameWindow = []; // Sliding window of { time, amps } over last 0.5s
+    let currentMotionScore = 0.0;
+    let prevActiveAmps = null;
 
     // Raw CSI Buffers
     let latestActiveAmplitudes = []; // Array of float amplitudes for latest frame
     let meanAmplitudeHistory = [];   // Array of { time, val }
     let motionScoreHistory = [];     // Array of { time, val }
-    let rawFrameBuffer = [];         // Sliding window of recent frames (for rolling std)
-    let currentMotionScore = 0.0;
-    let prevActiveAmps = null;       // Previous frame amplitudes for instant fluctuation tracking
 
     // ==========================================
     // ULTRA-FAST OFFSCREEN HEATMAP ENGINE
@@ -775,6 +790,8 @@
     // ==========================================
     // DOM ELEMENTS
     // ==========================================
+    const dispSource = document.getElementById("dispSource");
+    const pillSource = document.getElementById("pillSource");
     const dispFps = document.getElementById("dispFps");
     const dispLag = document.getElementById("dispLag");
     const dispTotalFrames = document.getElementById("dispTotalFrames");
@@ -837,29 +854,50 @@
       return activeAmps;
     }
 
-    function computeMotionScore(frames) {
-      if (frames.length < 3) return 0.0;
-      const K = frames[0].length;
-      let totalStd = 0.0;
+    // ------------------------------------------
+    // ROBUST PHYSICAL MOTION ENGINE (AGC NORMALIZED)
+    // ------------------------------------------
+    function computeNormalizedWindowStd(windowFrames) {
+      if (!windowFrames || windowFrames.length < 3) return 0.0;
+      const numSubcarriers = windowFrames[0].amps.length;
+      if (numSubcarriers === 0) return 0.0;
 
-      for (let sc = 0; sc < K; sc++) {
+      // 1. Frame-level normalization: scale each frame by its mean amplitude to eliminate AGC jumps
+      const normFrames = [];
+      for (let f = 0; f < windowFrames.length; f++) {
+        const amps = windowFrames[f].amps;
+        if (amps.length !== numSubcarriers) continue;
         let sum = 0;
-        for (let f = 0; f < frames.length; f++) sum += frames[f][sc];
-        const mean = sum / frames.length;
+        for (let i = 0; i < amps.length; i++) sum += amps[i];
+        const mean = sum / amps.length || 1.0;
+        const norm = new Float32Array(numSubcarriers);
+        for (let i = 0; i < numSubcarriers; i++) norm[i] = amps[i] / mean;
+        normFrames.push(norm);
+      }
+
+      if (normFrames.length < 3) return 0.0;
+      const N = normFrames.length;
+
+      // 2. Average standard deviation across active subcarriers (Prompt B specification)
+      let totalStd = 0.0;
+      for (let sc = 0; sc < numSubcarriers; sc++) {
+        let scSum = 0;
+        for (let f = 0; f < N; f++) scSum += normFrames[f][sc];
+        const scMean = scSum / N;
 
         let varSum = 0;
-        for (let f = 0; f < frames.length; f++) {
-          const diff = frames[f][sc] - mean;
+        for (let f = 0; f < N; f++) {
+          const diff = normFrames[f][sc] - scMean;
           varSum += diff * diff;
         }
-        totalStd += Math.sqrt(varSum / frames.length);
+        totalStd += Math.sqrt(varSum / N);
       }
-      return totalStd / K;
+
+      // Scaled by 100 for intuitive range: ~0.1-0.4 idle, 2.0-8.0+ for physical motion
+      return (totalStd / numSubcarriers) * 100.0;
     }
 
     // Exact deduplication check
-    let prevRawIq = null;
-
     function isRawIqDuplicate(current, previous) {
       if (!previous || !current) return false;
       if (current.length !== previous.length) return false;
@@ -869,15 +907,145 @@
       return true;
     }
 
+    // ------------------------------------------
+    // UNIFIED FRAME PROCESSOR (LOCAL & CLOUD)
+    // ------------------------------------------
+    function processIncomingCsiFrame(activeAmps, timestamp, serverScore, serverPktRate, rssi) {
+      if (!activeAmps || activeAmps.length === 0) return;
+
+      const now = performance.now();
+      lastRawPacketTime = Date.now();
+      totalFramesReceived++;
+
+      // Track FPS locally
+      rawFrameTimes.push(now);
+      while (rawFrameTimes.length > 0 && rawFrameTimes[0] < now - 2000) {
+        rawFrameTimes.shift();
+      }
+
+      latestActiveAmplitudes = activeAmps;
+
+      // Maintain 0.5s sliding window for motion calculation
+      csiFrameWindow.push({ time: now, amps: activeAmps });
+      while (csiFrameWindow.length > 0 && csiFrameWindow[0].time < now - 500) {
+        csiFrameWindow.shift();
+      }
+
+      // Compute motion score
+      let targetScore = 0.0;
+      if (serverScore !== null && serverScore !== undefined) {
+        targetScore = serverScore;
+      } else {
+        targetScore = computeNormalizedWindowStd(csiFrameWindow);
+      }
+
+      // Smooth score transitions (fast attack, smooth release)
+      if (targetScore > currentMotionScore) {
+        currentMotionScore = currentMotionScore * 0.2 + targetScore * 0.8;
+      } else {
+        currentMotionScore = currentMotionScore * 0.7 + targetScore * 0.3;
+      }
+
+      // Mean Amplitude
+      let sumAmp = 0;
+      for (let i = 0; i < activeAmps.length; i++) sumAmp += activeAmps[i];
+      const meanAmp = sumAmp / activeAmps.length;
+      const t = Date.now();
+
+      meanAmplitudeHistory.push({ time: t, val: meanAmp });
+      if (meanAmplitudeHistory.length > 120) meanAmplitudeHistory.shift();
+
+      motionScoreHistory.push({ time: t, val: currentMotionScore });
+      if (motionScoreHistory.length > 120) motionScoreHistory.shift();
+
+      // Calibration accumulation
+      if (isCalibrating) {
+        calibScores.push(currentMotionScore);
+      }
+
+      // Push new column to offscreen heatmap buffer
+      pushHeatmapFrame(activeAmps);
+
+      if (serverPktRate !== null && serverPktRate !== undefined && dispPktRate) {
+        dispPktRate.textContent = `${serverPktRate.toFixed(1)} Hz`;
+      }
+    }
+
     // ==========================================
-    // POLLING ENGINE (CONCURRENCY-GUARDED)
+    // DUAL DATA PIPELINE: WEBSOCKET & FALLBACK
     // ==========================================
+
+    function initWebSocket() {
+      try {
+        ws = new WebSocket(WS_URL);
+
+        ws.onopen = () => {
+          wsConnected = true;
+          currentSource = "websocket";
+          if (dispSource && pillSource) {
+            dispSource.textContent = "🟢 Local WebSocket";
+            dispSource.style.color = "var(--cyan)";
+            pillSource.style.borderColor = "var(--cyan)";
+          }
+          console.log("[WebSocket] Connected to local CSI stream at", WS_URL);
+        };
+
+        ws.onmessage = (event) => {
+          if (isPaused) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === "csi_frame") {
+              processIncomingCsiFrame(
+                data.amplitudes,
+                data.timestamp,
+                data.motion_score,
+                data.packet_rate,
+                data.rssi
+              );
+            } else if (data.type === "calibration_result") {
+              motionThreshold = data.recommended_threshold;
+              thresholdSlider.value = motionThreshold;
+              thresholdVal.textContent = motionThreshold.toFixed(2);
+              calibBtnText.textContent = `Calibrated (${motionThreshold.toFixed(2)})`;
+              setTimeout(() => {
+                calibBtnText.textContent = "Calibrate Idle (4s)";
+                btnCalibrate.style.borderColor = "var(--cyan)";
+                btnCalibrate.style.color = "var(--cyan)";
+              }, 3000);
+            }
+          } catch (err) {
+            console.error("[WebSocket] Frame decode error:", err);
+          }
+        };
+
+        ws.onerror = () => {
+          // Socket error - will trigger onclose
+        };
+
+        ws.onclose = () => {
+          wsConnected = false;
+          currentSource = "firebase";
+          if (dispSource && pillSource) {
+            dispSource.textContent = "🟡 Cloud Relay (Firebase)";
+            dispSource.style.color = "var(--amber)";
+            pillSource.style.borderColor = "var(--amber)";
+          }
+          // Attempt reconnect every 3s in background
+          setTimeout(initWebSocket, 3000);
+        };
+      } catch (err) {
+        wsConnected = false;
+        currentSource = "firebase";
+        setTimeout(initWebSocket, 3000);
+      }
+    }
 
     let isFetchingRaw = false;
 
-    // 1. Raw CSI Polling (3x per second -> ~320ms)
+    // Firebase RTDB Polling Fallback (when local WebSocket is offline)
     async function pollRawCsi() {
-      if (isPaused) {
+      if (isPaused || wsConnected) {
+        // If WebSocket is actively feeding packets, skip Firebase polling
         setTimeout(pollRawCsi, 500);
         return;
       }
@@ -904,60 +1072,15 @@
           if (raw_iq && raw_iq.length >= 256) {
             if (!isRawIqDuplicate(raw_iq, prevRawIq)) {
               prevRawIq = raw_iq;
-              lastRawPacketTime = Date.now();
-              totalFramesReceived++;
-
-              // Track FPS
-              const now = performance.now();
-              rawFrameTimes.push(now);
-              while (rawFrameTimes.length > 0 && rawFrameTimes[0] < now - 2000) {
-                rawFrameTimes.shift();
-              }
-
-              // Process Amplitudes
               const activeAmps = parseRawIq(raw_iq);
               if (activeAmps && activeAmps.length > 0) {
-                // Instantaneous frame-to-frame subcarrier fluctuation:
-                // Directly tracks live movement of the subcarrier waveform with zero buffer delay
-                if (prevActiveAmps && prevActiveAmps.length === activeAmps.length) {
-                  let deltaSum = 0;
-                  for (let i = 0; i < activeAmps.length; i++) {
-                    const diff = activeAmps[i] - prevActiveAmps[i];
-                    deltaSum += diff * diff;
-                  }
-                  currentMotionScore = Math.sqrt(deltaSum / activeAmps.length);
-                } else {
-                  currentMotionScore = 0.0;
-                }
-                prevActiveAmps = activeAmps.slice();
-
-                latestActiveAmplitudes = activeAmps;
-
-                // Mean Amplitude
-                let sumAmp = 0;
-                for (let i = 0; i < activeAmps.length; i++) sumAmp += activeAmps[i];
-                const meanAmp = sumAmp / activeAmps.length;
-                const t = Date.now();
-                meanAmplitudeHistory.push({ time: t, val: meanAmp });
-                if (meanAmplitudeHistory.length > 120) meanAmplitudeHistory.shift();
-
-                // Motion score history for bottom line chart
-                motionScoreHistory.push({ time: t, val: currentMotionScore });
-                if (motionScoreHistory.length > 120) motionScoreHistory.shift();
-
-                // Calibration collection
-                if (isCalibrating) {
-                  calibScores.push(currentMotionScore);
-                }
-
-                // Push new column to offscreen heatmap buffer
-                pushHeatmapFrame(activeAmps);
+                processIncomingCsiFrame(activeAmps, Date.now() / 1000, null, null, null);
               }
             }
           }
         }
       } catch (e) {
-        // Network hiccup or abort - handled gracefully
+        // Network hiccup - handled gracefully
       } finally {
         clearTimeout(timeoutId);
         isFetchingRaw = false;
@@ -1083,6 +1206,9 @@
     thresholdSlider.addEventListener("input", (e) => {
       motionThreshold = parseFloat(e.target.value);
       thresholdVal.textContent = motionThreshold.toFixed(2);
+      if (wsConnected && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: "set_threshold", threshold: motionThreshold }));
+      }
     });
 
     btnPause.addEventListener("click", () => {
@@ -1102,10 +1228,15 @@
       if (isCalibrating) return;
       isCalibrating = true;
       calibScores = [];
-      calibTimer = 10;
+      calibTimer = 4;
       calibBtnText.textContent = `Calibrating (${calibTimer}s)... Keep Idle!`;
       btnCalibrate.style.borderColor = "var(--amber)";
       btnCalibrate.style.color = "var(--amber)";
+
+      // If connected to server over WebSocket, request server-side idle calibration
+      if (wsConnected && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: "calibrate_idle", duration: 4.0 }));
+      }
 
       calibIntervalId = setInterval(() => {
         calibTimer--;
@@ -1126,12 +1257,16 @@
             thresholdSlider.value = motionThreshold;
             thresholdVal.textContent = motionThreshold.toFixed(2);
             calibBtnText.textContent = `Calibrated (${motionThreshold.toFixed(2)})`;
+
+            if (wsConnected && ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ action: "set_threshold", threshold: motionThreshold }));
+            }
           } else {
-            calibBtnText.textContent = "Calibrate Idle (10s)";
+            calibBtnText.textContent = "Calibrate Idle (4s)";
           }
 
           setTimeout(() => {
-            calibBtnText.textContent = "Calibrate Idle (10s)";
+            calibBtnText.textContent = "Calibrate Idle (4s)";
             btnCalibrate.style.borderColor = "var(--cyan)";
             btnCalibrate.style.color = "var(--cyan)";
           }, 3000);
@@ -1159,25 +1294,59 @@
         dispTotalFrames.textContent = totalFramesReceived;
 
         // 5-second NO DATA warning
-        if (now - lastRawPacketTime > 5000 || now - lastModelPacketTime > 5000) {
+        if (now - lastRawPacketTime > 5000 && now - lastModelPacketTime > 5000) {
           noDataAlert.style.display = "block";
         } else {
           noDataAlert.style.display = "none";
         }
 
-        // 2. Render Motion Graphics Canvas
+        // 2. Continuous Score Decay & Debounce State Machine:
+        // If no new frame arrived in > 250ms, smoothly decay motion score towards 0
+        const timeSincePacket = now - lastRawPacketTime;
+        if (timeSincePacket > 250) {
+          currentMotionScore *= 0.88;
+          if (currentMotionScore < 0.05) currentMotionScore = 0.0;
+        }
+
+        // Hysteresis & Debounce Logic
+        const trigThresh = motionThreshold;
+        const relThresh = motionThreshold * 0.75;
+
+        if (!isMotionActive) {
+          if (currentMotionScore >= trigThresh) {
+            motionTriggerFrames++;
+            if (motionTriggerFrames >= 2) {
+              isMotionActive = true;
+              motionReleaseFrames = 0;
+            }
+          } else {
+            motionTriggerFrames = 0;
+          }
+        } else {
+          if (currentMotionScore < relThresh) {
+            motionReleaseFrames++;
+            if (motionReleaseFrames >= 3) {
+              isMotionActive = false;
+              motionTriggerFrames = 0;
+            }
+          } else {
+            motionReleaseFrames = 0;
+          }
+        }
+
+        // 3. Render Motion Graphics Canvas
         renderMotionGraphics();
 
-        // 3. Render Waveform Canvas
+        // 4. Render Waveform Canvas
         renderWaveform();
 
-        // 4. Render Scrolling Heatmap
+        // 5. Render Scrolling Heatmap
         renderHeatmap();
 
-        // 5. Render Raw CSI Line Chart
+        // 6. Render Raw CSI Line Chart
         renderChartRawCsi();
 
-        // 6. Render Model Trajectory Line Chart
+        // 7. Render Model Trajectory Line Chart
         renderChartModel();
       } catch (err) {
         console.error("Dashboard renderLoop error:", err);
@@ -1194,8 +1363,8 @@
       const h = motionCanvas.height;
       motionCtx.clearRect(0, 0, w, h);
 
-      // Decoupled from external model: reacts SOLELY to live Raw CSI motion score vs threshold
-      const isMotion = currentMotionScore >= motionThreshold;
+      // Decoupled from external model: reacts SOLELY to live Raw CSI motion score vs threshold with debounce
+      const isMotion = isMotionActive;
       const speedMultiplier = isMotion ? 2.5 : 1.0;
       wavePhase += 0.05 * speedMultiplier;
       handAnimPhase += 0.08;
@@ -1245,7 +1414,7 @@
         motionCtx.stroke();
       }
 
-      // Animated Hand Wave Icon (Appears/disappears immediately when currentMotionScore crosses motionThreshold)
+      // Animated Hand Wave Icon (Appears/disappears immediately when motion state flips)
       if (isMotion) {
         const handX = w / 2;
         const handY = h / 2 + Math.sin(handAnimPhase * 2) * 8;
@@ -1526,6 +1695,7 @@
     // INITIALIZATION
     // ==========================================
     window.addEventListener("DOMContentLoaded", () => {
+      initWebSocket();
       pollRawCsi();
       pollModel();
       requestAnimationFrame(renderLoop);
